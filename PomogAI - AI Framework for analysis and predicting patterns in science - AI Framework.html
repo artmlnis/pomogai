@@ -1,0 +1,1920 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Доказательная карта научной области</title>
+
+<!-- Tailwind -->
+<script src="https://cdn.tailwindcss.com"></script>
+
+<!-- Alpine.js (defer) -->
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+<!-- Chart.js (radar charts / «розы») -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<!-- html2pdf (экспорт отчёта) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+<!-- pdf.js (извлечение текста из PDF) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+<!-- mammoth (извлечение текста из DOCX) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+
+<style>
+  /* ===== Базовые токены ===== */
+  :root {
+    --bg: #FAFAFA;
+    --text: #1F2937;
+    --accent: #1F4E79;
+    --accent-2: #2E75B6;
+    --pink: #EC4899;
+    --pink-soft: rgba(236, 72, 153, 0.2);
+    --border: #E5E7EB;
+  }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", "SF Pro Text", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Скрываем элементы до инициализации Alpine */
+  [x-cloak] { display: none !important; }
+
+  /* Шиммер для текущей задачи в Processing */
+  @keyframes shimmer {
+    0%   { background-position: -800px 0; }
+    100% { background-position:  800px 0; }
+  }
+  .shimmer {
+    background: linear-gradient(90deg, #F3F4F6 0%, #E0E7FF 25%, #F3F4F6 50%, #E0E7FF 75%, #F3F4F6 100%);
+    background-size: 1600px 100%;
+    animation: shimmer 2.4s linear infinite;
+  }
+
+  /* Радар-чарт контейнеры */
+  .chart-wrap-large { width: 100%; max-width: 600px; height: 600px; margin: 0 auto; }
+  .chart-wrap-mini  { width: 100%; max-width: 250px; height: 250px; margin: 0 auto; }
+  @media (max-width: 768px) {
+    .chart-wrap-large { height: 400px; }
+  }
+
+  /* Цветные полоски кластеров */
+  .cluster-bar {
+    height: 10px;
+    border-radius: 9999px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  }
+
+  /* Аккуратные ссылки */
+  a.link { color: var(--accent-2); text-decoration: underline; text-underline-offset: 2px; }
+  a.link:hover { color: var(--accent); }
+
+  /* Стили печати — PDF-экспорт */
+  @media print {
+    body { background: #ffffff !important; }
+    .no-print { display: none !important; }
+    .print-card, .rounded-2xl { page-break-inside: avoid; break-inside: avoid; }
+    body, html { font-size: 12px; }
+  }
+  /* Применяется во время экспорта (html2pdf) */
+  .exporting { background: #ffffff !important; }
+  .exporting .rounded-2xl { page-break-inside: avoid; break-inside: avoid; }
+  .exporting .no-print { display: none !important; }
+
+  /* Drag-and-drop hover */
+  .dropzone.is-hover { border-color: #60A5FA; background: #EFF6FF; }
+
+  /* Аккордеоны: плавная анимация */
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+
+  /* Focus-visible — доступность */
+  button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent-2);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  /* Прогресс-бар */
+  .progressbar-track { background: #E5E7EB; border-radius: 9999px; overflow: hidden; height: 8px; }
+  .progressbar-fill  { background: linear-gradient(90deg, var(--accent), var(--accent-2)); height: 100%; transition: width 0.4s ease; }
+
+  /* Toast стек */
+  .toast-stack { position: fixed; top: 16px; right: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; }
+
+  /* Радио-карточки */
+  .radio-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; cursor: pointer; transition: all .2s ease; }
+  .radio-card:hover { border-color: #93C5FD; background: #F8FAFC; }
+  .radio-card.is-active { border-color: var(--accent); background: #EFF6FF; }
+</style>
+
+<script>
+  // ===== Реестр классов фактов (8 классов, 7 основных + «Другое») =====
+  const CLASS_REGISTRY = [
+    { id: 'kadry',          name: 'Кадры',          short: 'Кадры',     description: 'Подготовка, карьера, мотивация, команды. «Есть ли специалисты?»', color: '#EF4444' },
+    { id: 'infrastruktura', name: 'Инфраструктура', short: 'Инфра',     description: 'Лаборатории, оборудование, вычислительные мощности, данные. «Доступно ли оборудование?»', color: '#F59E0B' },
+    { id: 'finansy',        name: 'Финансы',        short: 'Финансы',   description: 'Источники, распределение, экономика исследований, коммерциализация. «Откуда деньги?»', color: '#10B981' },
+    { id: 'pravila',        name: 'Правила',        short: 'Правила',   description: 'Законы, стандарты, этика, ограничения. «Какие нормы нужно учесть?»', color: '#3B82F6' },
+    { id: 'metody',         name: 'Методы',         short: 'Методы',    description: 'Типы исследований, сбор данных, анализ, проверка. «Насколько надёжны подходы?»', color: '#8B5CF6' },
+    { id: 'produkty',       name: 'Продукты',       short: 'Продукты',  description: 'Публикации, ИС, технологии, документы. «Что конкретно создано?»', color: '#EC4899' },
+    { id: 'vnedrenie',      name: 'Внедрение',      short: 'Внедрение', description: 'Распространение, практика, политика, социальный эффект. «Как доходит до пользователей?»', color: '#06B6D4' },
+    { id: 'drugoe',         name: 'Другое',         short: 'Другое',    description: 'Объекты, не вошедшие в предыдущие классы.', color: '#9CA3AF' },
+  ];
+
+  // ===== Конфигурация ИИ =====
+  const AI_BASE_URL = 'https://openrouter.ai/api/v1';
+  const AI_MODEL    = 'deepseek/deepseek-v4-flash';
+  const DEFAULT_OPENROUTER_API_KEY = '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';
+  const STATE_VERSION = 'api-only-v1';
+
+  // ===== Промпты для AI (используем строго те, что заданы спецификацией) =====
+  const PROMPTS = {
+    // №1 — извлечение фактов из одного документа
+    extractFacts: (text) => `Проанализируй документ. Цель: выделить все инсайты, решения, риски, возможности, выводы и рекомендации по всему документу без пропусков, относящиеся к науке (кадры, инфраструктура, финансы, правила, методы, продукты, внедрение).
+
+Верни строго JSON в формате:
+{
+  "title": "название документа в оригинале",
+  "author": "автор/организация",
+  "facts": [
+    { "n": 1, "text": "факт на русском", "page": 12, "example": "название университета / имя / проект / сумма (если есть, иначе пусто)", "original": "формулировка на языке оригинала (если документ не на русском, иначе пусто)" }
+  ]
+}
+
+Один пункт — один факт. Не дублируй. Сохраняй терминологию источника.
+
+Текст документа:
+<document>
+${text}
+</document>`,
+
+    // №1.1 — саммари документа
+    summarize: (text) => `Создай саммари документа: 10 ключевых инсайтов/решений/рисков/выводов в науке.
+
+Верни строго JSON:
+{
+  "title_original": "...",
+  "title_translated": "...",
+  "author": "...",
+  "year": 2025,
+  "summary": [
+    { "n": 1, "text": "1–2 предложения главной мысли", "example": "конкретный пример если есть, иначе пусто", "context": "дополнительный контекст курсивом если необходим, иначе пусто" }
+  ]
+}
+
+Текст:
+<document>
+${text}
+</document>`,
+
+    // №2 — роза по документу
+    rosePerDoc: (factsJson) => `Ты — аналитик науки. На вход — факты одного источника. Определи распределение фактов по 7 классам (+ «Другое»). Сумма долей = 100%. Трижды проведи оценку и выведи среднее.
+
+Классы: Кадры, Инфраструктура, Финансы, Правила, Методы, Продукты, Внедрение, Другое.
+
+Верни строго JSON:
+{
+  "classes": [
+    { "id": "kadry", "name": "Кадры", "count": 5, "share": 12, "key_facts": [ { "text": "...", "page": 5 } ] }
+  ],
+  "sum_check": 100
+}
+
+В key_facts — не менее 3 фактов на класс с числовой статистикой или прогнозом, со ссылкой на страницу.
+
+Факты:
+<facts>
+${factsJson}
+</facts>`,
+
+    // №3 — объединение фактов
+    mergeFacts: (allFacts) => `На входе — факты из нескольких источников. Объедини их, удалив полные дубли (один и тот же факт из разных источников) и пометив частичные (схожая суть, разные числа).
+
+Верни JSON:
+{
+  "facts": [
+    { "text": "...", "class_id": "kadry", "sources": [ { "author": "...", "title": "...", "page": 12, "quote": "прямая цитата" } ], "duplicate_type": "unique|full|partial|contradicting" }
+  ]
+}
+
+Входные факты:
+<all_facts>
+${allFacts}
+</all_facts>`,
+
+    // №4 — общая роза (используем тот же шаблон, что и №2, но с объединённым файлом)
+    roseCombined: (factsJson) => `Ты — аналитик науки. На вход — факты одного источника. Определи распределение фактов по 7 классам (+ «Другое»). Сумма долей = 100%. Трижды проведи оценку и выведи среднее.
+
+Классы: Кадры, Инфраструктура, Финансы, Правила, Методы, Продукты, Внедрение, Другое.
+
+Верни строго JSON:
+{
+  "classes": [
+    { "id": "kadry", "name": "Кадры", "count": 5, "share": 12, "key_facts": [ { "text": "...", "page": 5 } ] }
+  ],
+  "sum_check": 100
+}
+
+В key_facts — не менее 3 фактов на класс с числовой статистикой или прогнозом, со ссылкой на страницу.
+
+Факты:
+<facts>
+${factsJson}
+</facts>`,
+
+    // №5 — кластеризация
+    clusters: (combinedFacts) => `Сгруппируй факты в 5–10 содержательных кластеров. Один кластер — это группа тесно связанных идей. Внимание: сумма процентов по кластерам может превышать 100%, т.к. один источник часто упоминает несколько тем.
+
+Верни JSON:
+{
+  "clusters": [
+    { "n": 1, "name": "Краткое и ёмкое название", "share": 67, "description": "1–2 предложения, обобщающие идеи в единую мысль", "authors": ["автор1", "автор2"] }
+  ]
+}
+
+Упорядочи по убыванию share.
+
+Факты:
+<facts>
+${combinedFacts}
+</facts>`,
+
+    // №5.1 — река трендов
+    river: (clustersP1, clustersP2) => `На вход — кластеры двух периодов. Построй «реку времени»: определи судьбу каждого кластера: преемственность (→), слияние (+→), расщепление (→/→), исчезновение (---X--->), появление (---[новый]--->), возрождение (---[возрождение]--->).
+
+Верни JSON без Mermaid-диаграммы:
+{
+  "table": [
+    { "p1": "Кластер P1", "p2": "Кластер P2", "status": "Преемственность|Слияние|Расщепление|Исчезновение|Появление|Возрождение", "comment": "комментарий" }
+  ]
+}
+
+Кластеры периода 1:
+<p1>${clustersP1}</p1>
+
+Кластеры периода 2:
+<p2>${clustersP2}</p2>`,
+
+    // R — рекомендация по добору источников
+    recommend: (pain, strategy, biasClass, roseJson, clustersJson) => `Пользователь сформулировал свою исследовательскую боль:
+<pain>${pain}</pain>
+
+Пользователь выбрал стратегию: ${strategy} (balanced | focused: ${biasClass || '—'}).
+
+Распределение фактов в загруженных источниках:
+<distribution>${roseJson}</distribution>
+
+Кластеры:
+<clusters>${clustersJson}</clusters>
+
+Ответь в формате JSON:
+{
+  "verdict": "balanced|gap|surplus",
+  "recommendation_text": "1–3 предложения: либо «карта сбалансирована, готова», либо «класс X недопредставлен (Y% вместо ожидаемых Z%) — рекомендуем добавить: список конкретных типов источников»",
+  "suggested_sources": ["тип источника 1", "тип источника 2", "тип источника 3"]
+}
+
+Учитывай боль пользователя: если он явно интересуется одним измерением и оно покрыто слабо — указывай это первым приоритетом.`,
+  };
+
+  // ===== Утилитные функции =====
+
+  // Достать JSON из ответа модели (обернуть в markdown — отрезать).
+  function safeJsonParse(raw) {
+    if (typeof raw !== 'string') return null;
+    let s = raw.trim();
+    // Срезаем markdown-кодовые блоки ```json ... ```
+    s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+    // Иногда модель оборачивает JSON в текст — попробуем вытащить от первой { до последней }
+    const start = s.indexOf('{');
+    const end = s.lastIndexOf('}');
+    if (start !== -1 && end !== -1 && end > start) {
+      const candidate = s.slice(start, end + 1);
+      try { return JSON.parse(candidate); } catch (e) { /* идём дальше */ }
+    }
+    try { return JSON.parse(s); } catch (e) { return null; }
+  }
+
+  // Безопасное приведение числа (защита от NaN)
+  function num(v, fallback = 0) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  // Получить класс по id
+  function getClassMeta(id) {
+    return CLASS_REGISTRY.find(c => c.id === id) || CLASS_REGISTRY[CLASS_REGISTRY.length - 1];
+  }
+
+  // Нормализация долей в розе до 100 (если сумма ≠ 100)
+  function normalizeRose(classes) {
+    if (!Array.isArray(classes) || classes.length === 0) return { classes: [], normalized: false };
+    const total = classes.reduce((acc, c) => acc + num(c.share), 0);
+    if (total <= 0) return { classes, normalized: false };
+    const normalizedFlag = Math.abs(total - 100) > 0.5;
+    if (!normalizedFlag) return { classes, normalized: false };
+    const fixed = classes.map(c => ({ ...c, share: +(num(c.share) * 100 / total).toFixed(2) }));
+    return { classes: fixed, normalized: true };
+  }
+
+  // Общая роза: сумма значений категории по документам / общее число всех фактов
+  function buildCombinedRoseFromDocuments(documents) {
+    const countMap = {};
+    CLASS_REGISTRY.forEach(c => { countMap[c.id] = 0; });
+
+    const totalFacts = (documents || []).reduce((acc, doc) =>
+      acc + (doc.factsRaw && Array.isArray(doc.factsRaw.facts) ? doc.factsRaw.facts.length : 0), 0);
+
+    (documents || []).forEach(doc => {
+      const classes = doc.rose && Array.isArray(doc.rose.classes) ? doc.rose.classes : [];
+      classes.forEach(cls => {
+        const classId = (cls.id || '').trim().toLowerCase();
+        const meta = CLASS_REGISTRY.find(c =>
+          c.id === classId || (cls.name || '').trim().toLowerCase() === c.name.toLowerCase()
+        );
+        if (!meta) return;
+
+        const count = Number.isFinite(Number(cls.count))
+          ? Number(cls.count)
+          : Math.round(num(cls.share) * ((doc.factsRaw && Array.isArray(doc.factsRaw.facts)) ? doc.factsRaw.facts.length : 0) / 100);
+        countMap[meta.id] += count;
+      });
+    });
+
+    return {
+      classes: CLASS_REGISTRY.map(c => ({
+        id: c.id,
+        name: c.name,
+        count: countMap[c.id],
+        share: totalFacts > 0 ? +((countMap[c.id] / totalFacts) * 100).toFixed(2) : 0,
+        key_facts: [],
+      })),
+      sum_check: totalFacts > 0 ? 100 : 0,
+    };
+  }
+
+  function rowsFromMermaid(src) {
+    const labels = {};
+    const rows = [];
+
+    String(src || '').split(/\n+/).forEach(rawLine => {
+      const line = rawLine.trim();
+      const nodeMatch = line.match(/^([A-Za-z0-9_]+)\[([^\]]*)\]/);
+      if (nodeMatch) labels[nodeMatch[1]] = nodeMatch[2];
+    });
+
+    String(src || '').split(/\n+/).forEach(rawLine => {
+      const line = rawLine.trim();
+      const edgeMatch = line.match(/^([A-Za-z0-9_]+)(?:\[([^\]]*)\])?\s*-->\s*(?:\|([^|]*)\|)?\s*([A-Za-z0-9_]+)(?:\[([^\]]*)\])?/);
+      if (!edgeMatch) return;
+
+      const [, from, fromInlineLabel, status, to, toInlineLabel] = edgeMatch;
+      if (/^X\d*$/i.test(from) || /^X\d*$/i.test(to) || from === 'START' || to === 'END') return;
+
+      rows.push({
+        p1: fromInlineLabel || labels[from] || (from.startsWith('P1') ? from : ''),
+        p2: toInlineLabel || labels[to] || (to.startsWith('P2') ? to : ''),
+        status: (status || '').trim() || 'логическая связь',
+        comment: 'Строка восстановлена из сохраненного Mermaid-текста.',
+      });
+    });
+
+    return rows;
+  }
+
+  // Форматирование размера файла
+  function formatBytes(bytes) {
+    if (!bytes) return '0 Б';
+    const k = 1024;
+    const sizes = ['Б', 'КБ', 'МБ', 'ГБ'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  // Иконка по типу файла
+  function fileIcon(name) {
+    const ext = (name || '').toLowerCase().split('.').pop();
+    if (ext === 'pdf')  return '📄';
+    if (ext === 'docx') return '📝';
+    if (ext === 'txt')  return '📃';
+    return '📎';
+  }
+</script>
+</head>
+
+<body class="min-h-screen bg-[#FAFAFA] text-[#1F2937]">
+
+<div x-data="app()" x-init="init()" x-cloak class="w-full">
+
+  <!-- ===== Toast стек ===== -->
+  <div class="toast-stack no-print" aria-live="polite" aria-atomic="true">
+    <template x-for="t in toasts" :key="t.id">
+      <div class="rounded-xl shadow-sm border px-4 py-3 flex items-start gap-3 max-w-md transition-all duration-300"
+           :class="t.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' : (t.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-blue-50 border-blue-200 text-blue-800')">
+        <div class="flex-1">
+          <div class="font-semibold text-sm" x-text="t.title"></div>
+          <div class="text-xs mt-1 opacity-90" x-text="t.message"></div>
+        </div>
+        <template x-if="t.onRetry">
+          <button class="text-xs font-semibold px-2 py-1 rounded-md bg-white border border-current/30 hover:bg-current/10"
+                  @click="t.onRetry(); dismissToast(t.id)" aria-label="Повторить">Повторить</button>
+        </template>
+        <button class="text-current/70 hover:text-current text-lg leading-none" @click="dismissToast(t.id)" aria-label="Закрыть уведомление">&times;</button>
+      </div>
+    </template>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- ЭКРАН 1 — INTRO                                                -->
+  <!-- ============================================================ -->
+  <template x-if="screen === 'intro'">
+    <section class="min-h-screen flex flex-col items-center justify-start px-4 py-12 md:py-20">
+
+      <header class="max-w-3xl w-full text-center mb-10 md:mb-14">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-[#1F4E79] text-xs font-semibold tracking-wider uppercase mb-6">
+          AI-фреймворк для исследователей
+        </div>
+        <h1 class="text-3xl md:text-5xl font-bold tracking-tight text-[#1F2937] mb-4">
+          Доказательная карта научной области
+        </h1>
+        <p class="text-base md:text-lg text-gray-600 leading-relaxed max-w-2xl mx-auto">
+          Загрузите источники — получите проверяемый обзор темы за минуты, а не недели.
+        </p>
+      </header>
+
+      <div class="w-full max-w-3xl bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-10 transition-all duration-300">
+
+        <!-- Поле 1 — боль -->
+        <div class="mb-6">
+          <label for="pain" class="block text-sm font-semibold text-[#1F2937] mb-2">
+            Опишите вашу исследовательскую боль или вопрос
+            <span class="text-red-500" aria-hidden="true">*</span>
+          </label>
+          <textarea id="pain" rows="5"
+            class="w-full rounded-xl border border-gray-200 bg-[#FAFAFA] px-4 py-3 text-sm focus:outline-none focus:border-[#2E75B6] focus:ring-2 focus:ring-[#2E75B6]/20 transition-all duration-300 resize-y"
+            x-model="pain"
+            placeholder="Например: пишу обзор литературы по биомедицинской инженерии в РФ 2023–2025; нужно понять, где провалы — кадры, финансирование, инфраструктура — и где Россия отстаёт от мировых трендов"
+            aria-describedby="pain-hint"></textarea>
+          <div id="pain-hint" class="mt-1 text-xs text-gray-500 flex items-center justify-between">
+            <span>Минимум 20 символов.</span>
+            <span x-text="pain.length + ' / 20'"
+                  :class="pain.length >= 20 ? 'text-emerald-600' : 'text-gray-400'"></span>
+          </div>
+        </div>
+
+        <!-- Поле 2 — стратегия -->
+        <div class="mb-6">
+          <label class="block text-sm font-semibold text-[#1F2937] mb-3">Какой обзор вам нужен?</label>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+
+            <label class="radio-card flex items-start gap-3"
+                   :class="strategy === 'balanced' ? 'is-active' : ''">
+              <input type="radio" value="balanced" x-model="strategy" class="mt-1 accent-[#1F4E79]" aria-label="Сбалансированный обзор">
+              <div>
+                <div class="font-semibold text-sm">Сбалансированно</div>
+                <div class="text-xs text-gray-500 mt-1">Равномерное покрытие всех 7 измерений науки.</div>
+              </div>
+            </label>
+
+            <label class="radio-card flex items-start gap-3"
+                   :class="strategy === 'focused' ? 'is-active' : ''">
+              <input type="radio" value="focused" x-model="strategy" class="mt-1 accent-[#1F4E79]" aria-label="Фокус на одном измерении">
+              <div>
+                <div class="font-semibold text-sm">С акцентом</div>
+                <div class="text-xs text-gray-500 mt-1">Сделать акцент на одном измерении.</div>
+              </div>
+            </label>
+          </div>
+
+          <div x-show="strategy === 'focused'" x-transition.opacity class="mt-4">
+            <label for="bias-class" class="block text-xs font-medium text-gray-600 mb-1">Выберите измерение</label>
+            <select id="bias-class" x-model="biasClass"
+                    class="w-full rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm focus:outline-none focus:border-[#2E75B6] focus:ring-2 focus:ring-[#2E75B6]/20">
+              <option value="">— не выбрано —</option>
+              <template x-for="cls in classRegistry.filter(c => c.id !== 'drugoe')" :key="cls.id">
+                <option :value="cls.id" x-text="cls.name + ' — ' + cls.description.split('.')[0]"></option>
+              </template>
+            </select>
+          </div>
+        </div>
+
+
+        <!-- Поле 3 — API-ключ -->
+        <div class="mb-6">
+          <label for="api-key" class="block text-sm font-semibold text-[#1F2937] mb-2">
+            API-ключ OpenRouter
+            <span class="text-red-500" aria-hidden="true">*</span>
+          </label>
+          <input id="api-key" type="text" autocomplete="off" spellcheck="false"
+            class="w-full rounded-xl border border-gray-200 bg-[#FAFAFA] px-4 py-3 text-sm focus:outline-none focus:border-[#2E75B6] focus:ring-2 focus:ring-[#2E75B6]/20 transition-all duration-300"
+            x-model="apiKey"
+            placeholder="sk-or-v1-..."
+            aria-describedby="api-key-hint">
+          <div id="api-key-hint" class="mt-1 text-xs text-gray-500">
+            Получить ключ: <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" class="text-[#2E75B6] underline underline-offset-2">openrouter.ai/keys</a>. Ключ не сохраняется — вводите его перед каждым запуском.
+          </div>
+        </div>
+
+        <!-- CTA -->
+        <button
+          @click="goToUpload()"
+          :disabled="!canContinueIntro()"
+          class="w-full md:w-auto md:px-10 inline-flex items-center justify-center gap-2 rounded-xl bg-[#1F4E79] hover:bg-[#1a416a] text-white font-semibold text-sm md:text-base py-3 px-6 transition-all duration-300 disabled:bg-gray-300 disabled:cursor-not-allowed"
+          aria-label="Продолжить к загрузке файлов">
+          Продолжить
+          <span aria-hidden="true">→</span>
+        </button>
+
+      </div>
+
+      <!-- Описание боли исследователя — подвал -->
+      <div class="max-w-3xl w-full mt-10 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="rounded-2xl border border-gray-200 bg-white p-5">
+          <div class="text-xs font-semibold uppercase tracking-wider text-[#1F4E79] mb-2">1. Загрузка</div>
+          <div class="text-sm text-gray-600">5–20 источников: статьи, отчёты, обзоры, стратегии.</div>
+        </div>
+        <div class="rounded-2xl border border-gray-200 bg-white p-5">
+          <div class="text-xs font-semibold uppercase tracking-wider text-[#1F4E79] mb-2">2. Извлечение</div>
+          <div class="text-sm text-gray-600">AI достаёт все факты с привязкой к страницам.</div>
+        </div>
+        <div class="rounded-2xl border border-gray-200 bg-white p-5">
+          <div class="text-xs font-semibold uppercase tracking-wider text-[#1F4E79] mb-2">3. Карта</div>
+          <div class="text-sm text-gray-600">«Роза» по 7 измерениям, кластеры тем, «река» трендов.</div>
+        </div>
+      </div>
+
+    </section>
+  </template>
+
+  <!-- ============================================================ -->
+  <!-- ЭКРАН 2 — UPLOAD                                               -->
+  <!-- ============================================================ -->
+  <template x-if="screen === 'upload'">
+    <section class="min-h-screen px-4 py-10 md:py-16">
+
+      <div class="max-w-5xl mx-auto">
+
+        <header class="mb-8">
+          <button @click="backToIntro()" class="text-sm text-gray-500 hover:text-[#1F4E79] mb-4 inline-flex items-center gap-1" aria-label="Назад к описанию задачи">
+            <span aria-hidden="true">←</span> Назад
+          </button>
+          <h2 class="text-2xl md:text-4xl font-bold tracking-tight text-[#1F2937] mb-2">Загрузите источники</h2>
+          <p class="text-gray-600 max-w-2xl">PDF, DOCX или TXT. От 5 до 20 файлов. Чем разнообразнее источники (статьи + отчёты + стратегии + обзоры), тем точнее карта.</p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+          <!-- Drop-zone и список файлов -->
+          <div class="lg:col-span-2">
+            <div class="dropzone rounded-2xl bg-white border-2 border-dashed border-gray-300 p-10 md:p-12 text-center transition-all duration-300 hover:border-blue-400"
+                 @dragover.prevent="$el.classList.add('is-hover')"
+                 @dragleave.prevent="$el.classList.remove('is-hover')"
+                 @drop.prevent="handleDrop($event); $el.classList.remove('is-hover')"
+                 @click="$refs.fileInput.click()"
+                 role="button" tabindex="0"
+                 @keydown.enter="$refs.fileInput.click()"
+                 @keydown.space.prevent="$refs.fileInput.click()"
+                 aria-label="Зона загрузки файлов. Перетащите файлы сюда или нажмите для выбора">
+
+              <svg xmlns="http://www.w3.org/2000/svg" class="mx-auto mb-4 text-[#2E75B6]" width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+              </svg>
+
+              <div class="text-base font-semibold text-[#1F2937]">Перетащите файлы сюда или нажмите для выбора</div>
+              <div class="text-xs text-gray-500 mt-2">PDF, DOCX, TXT • до 20 МБ на файл</div>
+
+              <input x-ref="fileInput" type="file" multiple accept=".pdf,.docx,.txt" hidden
+                     @change="handleFileInput($event)" aria-hidden="true">
+            </div>
+
+            <!-- Список файлов -->
+            <div class="mt-6 space-y-3" x-show="files.length > 0">
+              <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                Загружено: <span x-text="files.length"></span> / 20
+              </div>
+              <template x-for="(f, idx) in files" :key="f.id">
+                <div class="rounded-2xl border border-gray-200 bg-white p-4 flex flex-col md:flex-row md:items-center gap-3 transition-all duration-300">
+                  <div class="text-2xl" x-text="iconForFile(f.name)" aria-hidden="true"></div>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm font-semibold truncate" x-text="f.name"></div>
+                    <div class="text-xs text-gray-500" x-text="formatSize(f.size)"></div>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <label class="text-xs text-gray-500">Период:</label>
+                    <select x-model="f.period"
+                            class="text-xs rounded-lg border border-gray-200 bg-white px-2 py-1 focus:outline-none focus:border-[#2E75B6]"
+                            :aria-label="'Период для файла ' + f.name">
+                      <option value="none">Не указано</option>
+                      <option value="p1">Период 1</option>
+                      <option value="p2">Период 2</option>
+                    </select>
+                    <button @click="removeFile(f.id)" class="text-gray-400 hover:text-red-500 transition-colors text-xl leading-none w-7 h-7 inline-flex items-center justify-center rounded-md hover:bg-red-50" :aria-label="'Удалить файл ' + f.name">&times;</button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Подсказка -->
+          <aside class="lg:col-span-1">
+            <div class="rounded-2xl border border-blue-100 bg-blue-50 p-5">
+              <div class="text-xs font-semibold uppercase tracking-wider text-[#1F4E79] mb-3">Совет</div>
+              <p class="text-sm text-[#1F2937] leading-relaxed">Чтобы построить «реку» трендов, добавьте источники из разных периодов или групп — например, отчёты за 2023 и 2025 годы — и пометьте их «Период 1» и «Период 2».</p>
+            </div>
+
+            <div class="rounded-2xl border border-gray-200 bg-white p-5 mt-4">
+              <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Распределение по периодам</div>
+              <div class="grid grid-cols-3 gap-2 text-center">
+                <div class="rounded-lg bg-gray-50 p-2">
+                  <div class="text-xs text-gray-500">Период 1</div>
+                  <div class="text-lg font-bold text-[#1F4E79]" x-text="files.filter(f => f.period === 'p1').length"></div>
+                </div>
+                <div class="rounded-lg bg-gray-50 p-2">
+                  <div class="text-xs text-gray-500">Период 2</div>
+                  <div class="text-lg font-bold text-[#1F4E79]" x-text="files.filter(f => f.period === 'p2').length"></div>
+                </div>
+                <div class="rounded-lg bg-gray-50 p-2">
+                  <div class="text-xs text-gray-500">Без периода</div>
+                  <div class="text-lg font-bold text-gray-500" x-text="files.filter(f => f.period === 'none').length"></div>
+                </div>
+              </div>
+              <div class="text-xs text-gray-500 mt-3" x-show="files.filter(f => f.period === 'p1').length > 0 && files.filter(f => f.period === 'p2').length > 0">
+                ✓ Достаточно для построения «реки» трендов
+              </div>
+            </div>
+          </aside>
+
+        </div>
+
+        <!-- CTA -->
+        <div class="mt-10 flex flex-col md:flex-row md:items-center gap-3">
+          <button
+            @click="runAnalysis()"
+            :disabled="files.length < 2"
+            class="inline-flex items-center justify-center gap-2 rounded-xl bg-[#1F4E79] hover:bg-[#1a416a] text-white font-semibold text-sm md:text-base py-3 px-8 transition-all duration-300 disabled:bg-gray-300 disabled:cursor-not-allowed"
+            aria-label="Запустить анализ загруженных файлов">
+            Запустить анализ
+            <span aria-hidden="true">→</span>
+          </button>
+          <button @click="backToIntro()" class="text-sm text-gray-500 hover:text-[#1F4E79] py-3 px-4" aria-label="Вернуться назад">Назад</button>
+          <div class="text-xs text-gray-400 md:ml-auto" x-show="files.length < 2">Загрузите минимум 2 файла, чтобы продолжить.</div>
+        </div>
+
+      </div>
+
+    </section>
+  </template>
+
+
+  <!-- ============================================================ -->
+  <!-- ЭКРАН 2.5 — PROCESSING                                          -->
+  <!-- ============================================================ -->
+  <template x-if="screen === 'processing'">
+    <section class="min-h-screen px-4 py-10 md:py-16 flex items-center justify-center">
+
+      <div class="w-full max-w-3xl">
+
+        <header class="text-center mb-8">
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-[#1F4E79] text-xs font-semibold tracking-wider uppercase mb-4">
+            Идёт обработка
+          </div>
+          <h2 class="text-2xl md:text-4xl font-bold tracking-tight text-[#1F2937] mb-2">Строим вашу доказательную карту</h2>
+          <p class="text-gray-600">Это может занять несколько минут — щадим лимиты API, обрабатываем источники по очереди.</p>
+        </header>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-10">
+
+          <!-- Прогресс -->
+          <div class="mb-6">
+            <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
+              <span>Прогресс</span>
+              <span x-text="Math.round(progress.percent) + '%'"></span>
+            </div>
+            <div class="progressbar-track">
+              <div class="progressbar-fill" :style="'width: ' + progress.percent + '%'"></div>
+            </div>
+            <div class="flex items-center justify-between text-xs text-gray-400 mt-2">
+              <span x-text="'Этап ' + progress.currentStep + ' из ' + progress.totalSteps"></span>
+              <span x-text="'Файл ' + progress.currentFileIdx + ' / ' + progress.totalFiles"></span>
+            </div>
+          </div>
+
+          <!-- Текущая задача — шиммер -->
+          <div class="rounded-xl border border-blue-100 p-5 mb-6 relative overflow-hidden">
+            <div class="shimmer absolute inset-0 opacity-30" aria-hidden="true"></div>
+            <div class="relative">
+              <div class="text-xs font-semibold uppercase tracking-wider text-[#1F4E79] mb-2">Сейчас обрабатывается</div>
+              <div class="text-base md:text-lg font-semibold text-[#1F2937]" x-text="progress.currentTask">Подготовка...</div>
+              <div class="text-sm text-gray-500 mt-1" x-text="progress.currentDetail" x-show="progress.currentDetail"></div>
+            </div>
+          </div>
+
+          <!-- Лог шагов -->
+          <div class="space-y-2 mb-6 max-h-72 overflow-y-auto pr-2">
+            <template x-for="(log, idx) in progressLog" :key="idx">
+              <div class="flex items-start gap-3 text-sm">
+                <div class="mt-1 w-2 h-2 rounded-full flex-shrink-0"
+                     :class="log.status === 'done' ? 'bg-emerald-500' : (log.status === 'error' ? 'bg-red-500' : 'bg-[#2E75B6] animate-pulse')"
+                     aria-hidden="true"></div>
+                <div class="flex-1">
+                  <div :class="log.status === 'done' ? 'text-gray-500 line-through' : (log.status === 'error' ? 'text-red-600' : 'text-[#1F2937] font-medium')" x-text="log.text"></div>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- Отмена -->
+          <div class="flex items-center justify-between">
+            <div class="text-xs text-gray-500">Не закрывайте вкладку — состояние не сохраняется после закрытия.</div>
+            <button @click="cancelAnalysis()" class="text-sm text-gray-500 hover:text-red-500 transition-colors px-3 py-2" aria-label="Отменить анализ">Отменить</button>
+          </div>
+
+        </div>
+
+      </div>
+
+    </section>
+  </template>
+
+  <!-- ============================================================ -->
+  <!-- ЭКРАН 3 — RESULTS                                              -->
+  <!-- ============================================================ -->
+  <template x-if="screen === 'results'">
+    <section class="min-h-screen px-4 py-10 md:py-16">
+
+      <div class="max-w-6xl mx-auto" id="report-root">
+
+        <!-- 3.1 — Шапка отчёта -->
+        <header class="mb-10">
+          <div class="text-xs font-semibold uppercase tracking-wider text-[#1F4E79] mb-2">Доказательная карта</div>
+          <h1 class="text-2xl md:text-4xl font-bold tracking-tight text-[#1F2937] mb-3">
+            <span x-text="(pain || '').slice(0, 60) + ((pain || '').length > 60 ? '…' : '')"></span>
+          </h1>
+          <div class="flex flex-wrap gap-4 text-sm text-gray-500">
+            <div><span class="font-semibold text-[#1F2937]" x-text="files.length"></span> источников</div>
+            <div><span class="font-semibold text-[#1F2937]" x-text="totalFactsCount()"></span> извлечённых фактов</div>
+            <div>Сгенерирована: <span x-text="generatedAt"></span></div>
+            <div>Стратегия: <span class="font-semibold text-[#1F2937]" x-text="strategy === 'balanced' ? 'Сбалансированно' : ('Фокус: ' + (getBiasName() || '—'))"></span></div>
+          </div>
+        </header>
+
+        <!-- 3.2 — Большая роза -->
+        <article class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-10 mb-8 print-card">
+          <h2 class="text-xl md:text-2xl font-bold tracking-tight mb-2">Распределение фактов по 7 измерениям науки</h2>
+          <p class="text-sm text-gray-600 mb-6">Радар-диаграмма (»роза») показывает доли фактов по классам в сводном корпусе.</p>
+
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 items-center">
+            <div class="lg:col-span-2">
+              <div class="chart-wrap-large">
+                <canvas id="rose-main" aria-label="Большая роза распределения фактов" role="img"></canvas>
+              </div>
+              <div x-show="results.rose && results.rose.normalized" class="text-xs text-gray-500 mt-3 text-center italic">* Доли нормализованы локально (сумма из ответа модели отличалась от 100%).</div>
+            </div>
+
+            <div class="lg:col-span-1">
+              <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Легенда</div>
+              <ul class="space-y-2">
+                <template x-for="cls in (results.rose && results.rose.classes) || []" :key="cls.id">
+                  <li class="flex items-center gap-3 text-sm">
+                    <span class="inline-block w-3 h-3 rounded-full flex-shrink-0"
+                          :style="'background:' + (num(cls.share) > 0 ? classColorById(cls.id) : '#D1D5DB')"
+                          aria-hidden="true"></span>
+                    <span class="flex-1" :class="num(cls.share) === 0 ? 'text-gray-400' : ''" x-text="cls.name"></span>
+                    <span x-show="num(cls.share) > 0" class="font-mono font-semibold text-[#1F4E79]" x-text="formatShare(cls.share)"></span>
+                    <span x-show="num(cls.share) === 0"
+                          class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-400 border border-gray-200">
+                      Не представлена
+                    </span>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- 3.3 — Рекомендация -->
+        <article class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-10 mb-8 print-card">
+          <div class="flex items-start gap-4">
+            <div class="text-3xl" aria-hidden="true">💡</div>
+            <div class="flex-1">
+              <h2 class="text-lg md:text-xl font-bold tracking-tight mb-2">Рекомендация</h2>
+              <p class="text-[#1F2937] text-base leading-relaxed mb-4" x-text="(results.recommendation && results.recommendation.recommendation_text) || 'Рекомендация будет сформирована после анализа.'"></p>
+              <template x-if="results.recommendation && Array.isArray(results.recommendation.suggested_sources) && results.recommendation.suggested_sources.length">
+                <div>
+                  <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Что добавить</div>
+                  <ul class="flex flex-wrap gap-2">
+                    <template x-for="(src, i) in results.recommendation.suggested_sources" :key="i">
+                      <li class="inline-flex items-center px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-[#1F4E79] text-xs font-medium" x-text="src"></li>
+                    </template>
+                  </ul>
+                </div>
+              </template>
+            </div>
+            <div class="text-xs font-semibold uppercase tracking-wider px-3 py-1 rounded-full self-start"
+                 :class="(results.recommendation && results.recommendation.verdict === 'balanced') ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : ((results.recommendation && results.recommendation.verdict === 'surplus') ? 'bg-amber-50 text-amber-700 border border-amber-100' : 'bg-red-50 text-red-700 border border-red-100')"
+                 x-text="verdictLabel((results.recommendation && results.recommendation.verdict) || '')"></div>
+          </div>
+        </article>
+
+        <!-- 3.4 — Разбор по документам -->
+        <article class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-10 mb-8 print-card">
+          <h2 class="text-xl md:text-2xl font-bold tracking-tight mb-6">Разбор по документам</h2>
+
+          <div class="space-y-3">
+            <template x-for="(doc, idx) in results.perDocument" :key="doc.id">
+              <details class="rounded-xl border border-gray-200 overflow-hidden transition-all duration-300" :open="doc.expanded || false">
+                <summary class="px-4 py-4 flex items-center gap-4 hover:bg-gray-50 transition-colors"
+                         @click="$nextTick(() => renderDocChart(doc))">
+                  <div class="text-2xl" aria-hidden="true" x-text="iconForFile(doc.fileName)"></div>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm md:text-base font-semibold text-[#1F2937] truncate" x-text="(doc.summary && doc.summary.title_translated) || doc.fileName"></div>
+                    <div class="text-xs text-gray-500 truncate" x-text="(doc.summary && doc.summary.author) || (doc.factsRaw && doc.factsRaw.author) || 'автор не указан'"></div>
+                  </div>
+                  <div class="text-xs text-gray-500 hidden md:flex items-center gap-4">
+                    <span x-text="(doc.factsRaw && Array.isArray(doc.factsRaw.facts) ? doc.factsRaw.facts.length : 0) + ' фактов'"></span>
+                    <span x-text="(doc.summary && doc.summary.year) ? doc.summary.year : ''"></span>
+                  </div>
+                  <span class="text-gray-400" aria-hidden="true">▾</span>
+                </summary>
+
+                <div class="px-4 md:px-6 py-6 border-t border-gray-100 bg-[#FAFAFA]">
+
+                  <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+
+                    <!-- Мини-роза -->
+                    <div class="md:col-span-1">
+                      <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Роза документа</div>
+                      <div class="chart-wrap-mini">
+                        <canvas :id="'rose-doc-' + doc.id" :aria-label="'Мини-роза для ' + doc.fileName" role="img"></canvas>
+                      </div>
+                      <div x-show="doc.rose && doc.rose.normalized" class="text-[10px] text-gray-500 mt-2 italic text-center">* Доли нормализованы.</div>
+                    </div>
+
+                    <!-- Метаданные -->
+                    <div class="md:col-span-2">
+                      <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Документ</div>
+                      <div class="text-xl md:text-2xl font-bold tracking-tight text-[#1F2937] leading-snug mb-2"
+                           x-text="(doc.summary && doc.summary.title_original) || (doc.factsRaw && doc.factsRaw.title) || doc.fileName"></div>
+                      <div x-show="doc.summary && doc.summary.title_translated && doc.summary.title_translated !== (doc.summary && doc.summary.title_original)" class="text-sm text-gray-600 italic mb-3" x-text="doc.summary && doc.summary.title_translated"></div>
+                      <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                        <dt class="text-gray-500">Автор:</dt>
+                        <dd class="text-[#1F2937]" x-text="(doc.summary && doc.summary.author) || (doc.factsRaw && doc.factsRaw.author) || '—'"></dd>
+                        <dt class="text-gray-500">Год:</dt>
+                        <dd class="text-[#1F2937]" x-text="(doc.summary && doc.summary.year) || '—'"></dd>
+                        <dt class="text-gray-500">Страниц:</dt>
+                        <dd class="text-[#1F2937]" x-text="doc.pages || '—'"></dd>
+                        <dt class="text-gray-500">Размер:</dt>
+                        <dd class="text-[#1F2937]" x-text="formatSize(doc.size)"></dd>
+                      </dl>
+                    </div>
+
+                  </div>
+
+                  <!-- Саммари -->
+                  <div class="mb-6">
+                    <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Саммари (10 пунктов)</div>
+                    <ol class="space-y-3 list-decimal list-inside">
+                      <template x-for="(item, i) in (doc.summary && doc.summary.summary) || []" :key="i">
+                        <li class="text-sm leading-relaxed">
+                          <span x-text="item.text"></span>
+                          <template x-if="item.example">
+                            <div class="text-xs text-[#1F4E79] mt-1 ml-5">Пример: <span x-text="item.example"></span></div>
+                          </template>
+                          <template x-if="item.context">
+                            <div class="text-xs text-gray-500 italic mt-1 ml-5" x-text="item.context"></div>
+                          </template>
+                        </li>
+                      </template>
+                    </ol>
+                  </div>
+
+                  <!-- Все факты — toggle -->
+                  <details class="rounded-lg border border-gray-200 bg-white">
+                    <summary class="px-4 py-3 text-sm font-semibold text-[#1F4E79] hover:bg-blue-50 transition-colors">
+                      Показать все факты (<span x-text="(doc.factsRaw && Array.isArray(doc.factsRaw.facts) ? doc.factsRaw.facts.length : 0)"></span>)
+                    </summary>
+                    <div class="px-4 py-3 border-t border-gray-100 overflow-x-auto">
+                      <table class="w-full text-xs">
+                        <thead>
+                          <tr class="text-left text-gray-500 border-b border-gray-100">
+                            <th class="py-2 pr-2 font-semibold w-10">№</th>
+                            <th class="py-2 pr-2 font-semibold">Факт</th>
+                            <th class="py-2 pr-2 font-semibold w-16">Стр.</th>
+                            <th class="py-2 pr-2 font-semibold">Пример</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <template x-for="(fact, i) in (doc.factsRaw && doc.factsRaw.facts) || []" :key="i">
+                            <tr class="border-b border-gray-50 align-top">
+                              <td class="py-2 pr-2 text-gray-400" x-text="fact.n || (i + 1)"></td>
+                              <td class="py-2 pr-2" x-text="fact.text"></td>
+                              <td class="py-2 pr-2 text-gray-500" x-text="fact.page || '—'"></td>
+                              <td class="py-2 pr-2 text-gray-500" x-text="fact.example || ''"></td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+
+                </div>
+              </details>
+            </template>
+          </div>
+        </article>
+
+        <!-- 3.5 — Кластеры -->
+        <article class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-10 mb-8 print-card">
+          <h2 class="text-xl md:text-2xl font-bold tracking-tight mb-2">Ключевые направления в массиве</h2>
+          <p class="text-sm text-gray-600 mb-6">Кластеры — это группы тесно связанных идей в загруженных источниках. Сумма процентов может превышать 100%, т.к. одна работа может относиться к нескольким темам.</p>
+
+          <!-- Список с цветными полосками -->
+          <ol class="space-y-3 mb-8">
+            <template x-for="(cl, i) in (results.clusters && results.clusters.clusters) || []" :key="i">
+              <li class="flex items-center gap-4">
+                <div class="text-xs font-mono text-gray-400 w-6" x-text="(cl.n || (i + 1)) + '.'"></div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-semibold text-[#1F2937] truncate" x-text="cl.name"></div>
+                </div>
+                <div class="w-40 md:w-72 progressbar-track">
+                  <div class="cluster-bar" :style="'width: ' + Math.min(num(cl.share), 100) + '%'"></div>
+                </div>
+                <div class="text-sm font-mono font-semibold text-[#1F4E79] w-14 text-right" x-text="formatShare(cl.share)"></div>
+              </li>
+            </template>
+          </ol>
+
+          <!-- Подробное описание -->
+          <div class="space-y-4 pt-6 border-t border-gray-100">
+            <template x-for="(cl, i) in (results.clusters && results.clusters.clusters) || []" :key="'desc-' + i">
+              <div>
+                <div class="text-sm font-semibold text-[#1F2937] mb-1">
+                  <span x-text="(cl.n || (i + 1)) + '. ' + cl.name"></span>
+                  <span class="text-[#1F4E79] font-mono ml-2" x-text="'(' + formatShare(cl.share) + ')'"></span>
+                </div>
+                <div class="text-sm text-gray-700 leading-relaxed" x-text="cl.description"></div>
+                <template x-if="Array.isArray(cl.authors) && cl.authors.length">
+                  <div class="text-xs text-gray-500 mt-1 italic">(<span x-text="cl.authors.join('; ')"></span>)</div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </article>
+
+        <!-- 3.6 — Река трендов -->
+        <article class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-10 mb-8 print-card">
+          <h2 class="text-xl md:text-2xl font-bold tracking-tight mb-2">Эволюция тем между периодами</h2>
+          <p class="text-sm text-gray-600 mb-6">«Река времени» показывает, что произошло с темами между периодом 1 и периодом 2.</p>
+
+          <template x-if="riverRows().length > 0">
+            <div>
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="text-left text-gray-500 border-b border-gray-200">
+                    <th class="py-2 pr-3 font-semibold">Период 1</th>
+                    <th class="py-2 pr-3 font-semibold">Период 2</th>
+                    <th class="py-2 pr-3 font-semibold">Статус</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="(row, i) in riverRows()" :key="i">
+                    <tr class="border-b border-gray-100 align-top">
+                      <td class="py-2 pr-3" x-text="row.p1 || '—'"></td>
+                      <td class="py-2 pr-3" x-text="row.p2 || '—'"></td>
+                      <td class="py-2 pr-3">
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
+                              :class="statusBadgeClass(row.status)" x-text="row.status || ''"></span>
+                        <div x-show="row.comment" class="text-xs text-gray-500 mt-1" x-text="row.comment"></div>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+
+          <template x-if="riverRows().length === 0">
+            <div class="rounded-xl border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">
+              Чтобы построить реку трендов, начните новый анализ и пометьте источники как «Период 1» и «Период 2» при загрузке.
+            </div>
+          </template>
+        </article>
+
+        <!-- 3.7 — Футер действий -->
+        <div class="no-print flex justify-end">
+          <button
+            @click="confirmReset()"
+            class="rounded-2xl bg-white border border-gray-200 hover:border-[#1F4E79] hover:text-[#1F4E79] font-semibold py-4 px-6 transition-all duration-300"
+            aria-label="Начать новый анализ">
+            Начать новый анализ
+          </button>
+        </div>
+
+      </div>
+
+    </section>
+  </template>
+
+</div>
+
+
+<script>
+  // ===== Главная Alpine-функция приложения =====
+  function app() {
+    return {
+      // --- Состояние ---
+      screen: 'intro',                 // intro | upload | processing | results
+      pain: '',
+      strategy: 'balanced',            // balanced | focused
+      biasClass: '',                   // id из CLASS_REGISTRY
+      apiKey: '',                      // OpenRouter API-ключ: вводится вручную и не сохраняется
+      files: [],                       // [{ id, name, size, period, file, text, pageMap }]
+      classRegistry: CLASS_REGISTRY,
+      generatedAt: '',
+      exporting: false,
+      canceled: false,
+      toasts: [],
+
+      results: {
+        perDocument: [],   // [{ id, fileName, factsRaw, summary, rose, pages, size }]
+        combined: null,    // объединённый файл фактов
+        rose: null,        // общая роза { classes, normalized }
+        clusters: null,    // { clusters: [...] }
+        river: null,       // { mermaid, table }
+        recommendation: null, // { verdict, recommendation_text, suggested_sources }
+      },
+
+      progress: {
+        currentTask: 'Подготовка...',
+        currentDetail: '',
+        currentStep: 0,
+        totalSteps: 1,
+        currentFileIdx: 0,
+        totalFiles: 0,
+        percent: 0,
+      },
+      progressLog: [],
+
+      // ====================================================
+      // ИНИЦИАЛИЗАЦИЯ
+      // ====================================================
+      init() {
+        // Восстановить состояние из sessionStorage (без API-ключа)
+        try {
+          const raw = sessionStorage.getItem('dkn_state_v1');
+          if (raw) {
+            const saved = JSON.parse(raw);
+            if (saved.version === STATE_VERSION) {
+              this.pain         = saved.pain || '';
+              this.strategy     = saved.strategy || 'balanced';
+              this.biasClass    = saved.biasClass || '';
+              // файлы / результаты сохраняем, кроме реальных File-объектов
+              if (saved.screen && saved.screen !== 'processing') this.screen = saved.screen;
+              if (Array.isArray(saved.files))            this.files = saved.files;
+              if (saved.results)                          this.results = saved.results;
+              if (saved.generatedAt)                      this.generatedAt = saved.generatedAt;
+            } else {
+              sessionStorage.removeItem('dkn_state_v1');
+            }
+          }
+        } catch (e) { /* пропускаем */ }
+
+        // Используем ключ по умолчанию; пользователь может заменить его вручную.
+        this.apiKey = DEFAULT_OPENROUTER_API_KEY;
+
+        // Сохраняем состояние при изменениях (debounce — простой), без API-ключа.
+        this.$watch('pain',         () => this.saveState());
+        this.$watch('strategy',     () => this.saveState());
+        this.$watch('biasClass',    () => this.saveState());
+        this.$watch('files',        () => this.saveState());
+        this.$watch('screen',       (v) => {
+          this.saveState();
+          if (v === 'results') {
+            // Чарты строим после рендера
+            this.$nextTick(() => this.renderMainRose());
+          }
+        });
+
+        // pdf.js worker
+        if (window.pdfjsLib) {
+          pdfjsLib.GlobalWorkerOptions.workerSrc =
+            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+
+        // Если открыли страницу сразу на экране results — отрисовать чарты
+        if (this.screen === 'results') {
+          this.$nextTick(() => this.renderMainRose());
+        }
+      },
+
+      // ====================================================
+      // СОХРАНЕНИЕ СОСТОЯНИЯ (sessionStorage — без API-ключа)
+      // ====================================================
+      saveState() {
+        try {
+          const data = {
+            version: STATE_VERSION,
+            screen: this.screen,
+            pain: this.pain,
+            strategy: this.strategy,
+            biasClass: this.biasClass,
+            generatedAt: this.generatedAt,
+            // сериализуем только метаданные файлов, без File-объектов
+            files: this.files.map(f => ({
+              id: f.id, name: f.name, size: f.size, period: f.period
+              // file/text/pageMap не сохраняем
+            })),
+            results: this.results,
+          };
+          sessionStorage.setItem('dkn_state_v1', JSON.stringify(data));
+        } catch (e) { /* лимит quota — пропускаем */ }
+      },
+
+      // ====================================================
+      // НАВИГАЦИЯ
+      // ====================================================
+      canContinueIntro() {
+        return (this.apiKey || '').trim().length >= 10
+            && (this.pain || '').trim().length >= 20
+            && (this.strategy === 'balanced' || (this.strategy === 'focused' && this.biasClass));
+      },
+      goToUpload() {
+        if (!this.canContinueIntro()) {
+          this.showToast({ type: 'error', title: 'Заполните обязательные поля', message: 'Опишите боль (минимум 20 символов) и выберите стратегию.' });
+          return;
+        }
+        this.screen = 'upload';
+      },
+      backToIntro() {
+        // Сбрасываем файлы, сохраняя API key
+        this.files = [];
+        this.screen = 'intro';
+      },
+
+      // ====================================================
+      // РАБОТА С ФАЙЛАМИ
+      // ====================================================
+      handleFileInput(ev) {
+        const list = ev.target.files;
+        if (!list) return;
+        this.addFiles(Array.from(list));
+        ev.target.value = '';
+      },
+      handleDrop(ev) {
+        const list = ev.dataTransfer && ev.dataTransfer.files;
+        if (!list) return;
+        this.addFiles(Array.from(list));
+      },
+      addFiles(arr) {
+        const allowed = ['.pdf', '.docx', '.txt'];
+        for (const f of arr) {
+          if (this.files.length >= 20) {
+            this.showToast({ type: 'error', title: 'Лимит файлов', message: 'Максимум 20 источников.' });
+            break;
+          }
+          const lower = f.name.toLowerCase();
+          if (!allowed.some(ext => lower.endsWith(ext))) {
+            this.showToast({ type: 'error', title: 'Неподдерживаемый формат', message: f.name });
+            continue;
+          }
+          if (f.size > 20 * 1024 * 1024) {
+            this.showToast({ type: 'error', title: 'Файл слишком большой', message: f.name + ' — больше 20 МБ.' });
+            continue;
+          }
+          this.files.push({
+            id: 'f_' + Math.random().toString(36).slice(2, 10),
+            name: f.name,
+            size: f.size,
+            period: 'none',
+            file: f,
+            text: null,
+            pageMap: null,
+          });
+        }
+      },
+      removeFile(id) {
+        this.files = this.files.filter(f => f.id !== id);
+      },
+      iconForFile(name) { return fileIcon(name); },
+      formatSize(b) { return formatBytes(b); },
+
+      // ====================================================
+      // ИЗВЛЕЧЕНИЕ ТЕКСТА (PDF/DOCX/TXT)
+      // ====================================================
+      async extractText(fileObj) {
+        const name = (fileObj.name || '').toLowerCase();
+        if (name.endsWith('.pdf'))  return await this.extractPdf(fileObj.file);
+        if (name.endsWith('.docx')) return await this.extractDocx(fileObj.file);
+        if (name.endsWith('.txt'))  return await this.extractTxt(fileObj.file);
+        throw new Error('Неподдерживаемый формат: ' + fileObj.name);
+      },
+
+      async extractPdf(file) {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        let fullText = '';
+        const pageMap = []; // [{ page, start, end }]
+        for (let p = 1; p <= pdf.numPages; p++) {
+          const page = await pdf.getPage(p);
+          const content = await page.getTextContent();
+          const pageText = content.items.map(it => it.str).join(' ');
+          const start = fullText.length;
+          fullText += `\n[Страница ${p}]\n` + pageText + '\n';
+          const end = fullText.length;
+          pageMap.push({ page: p, start, end });
+        }
+        return { text: fullText, pages: pdf.numPages, pageMap };
+      },
+
+      async extractDocx(file) {
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        const text = (result && result.value) || '';
+        return { text, pages: Math.max(1, Math.ceil(text.length / 3000)), pageMap: null };
+      },
+
+      async extractTxt(file) {
+        const text = await file.text();
+        return { text, pages: Math.max(1, Math.ceil(text.length / 3000)), pageMap: null };
+      },
+
+      // ====================================================
+      // УНИВЕРСАЛЬНЫЙ ВЫЗОВ ИИ (Anthropic / OpenAI / Gemini)
+      // ====================================================
+      async callAI(userMessage, { retries = 2, maxTokens = 4000 } = {}) {
+        let lastError = null;
+        for (let attempt = 0; attempt <= retries; attempt++) {
+          if (this.canceled) throw new Error('Анализ отменён пользователем.');
+          try {
+            const resp = await fetch(`${AI_BASE_URL}/chat/completions`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiKey}`,
+              },
+              body: JSON.stringify({
+                model: AI_MODEL,
+                max_tokens: maxTokens,
+                messages: [{ role: 'user', content: userMessage }],
+              }),
+            });
+            if (!resp.ok) {
+              const errText = await resp.text();
+              if ((resp.status === 429 || resp.status === 503) && attempt < retries) {
+                await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+                continue;
+              }
+              if (resp.status === 402) {
+                throw new Error('DeepSeek: на этом API-ключе закончился баланс. Пополните счёт на platform.deepseek.com или вставьте другой ключ.');
+              }
+              if (resp.status === 401 || resp.status === 403) {
+                throw new Error('DeepSeek: API-ключ не принят. Проверьте ключ на platform.deepseek.com и попробуйте снова.');
+              }
+              throw new Error(`API ${resp.status}: ${errText.slice(0, 300)}`);
+            }
+            const data = await resp.json();
+            return (data && data.choices && data.choices[0] &&
+                    data.choices[0].message && data.choices[0].message.content) || '';
+          } catch (e) {
+            lastError = e;
+            if (String(e && e.message || e).includes('закончился баланс')) throw lastError;
+            if (attempt < retries) {
+              await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+              continue;
+            }
+            throw lastError;
+          }
+        }
+        throw lastError || new Error('Неизвестная ошибка API');
+      },
+
+      // ====================================================
+      // ОБЁРТКА: вызов с парсингом JSON и фолбэком
+      // ====================================================
+      async callAIJson(prompt, fallback, options = {}) {
+        const raw = await this.callAI(prompt, options);
+        const parsed = safeJsonParse(raw);
+        if (!parsed) {
+          console.warn('Не удалось распарсить JSON, raw:', raw.slice(0, 300));
+          return fallback;
+        }
+        return parsed;
+      },
+
+      // ====================================================
+      // ОСНОВНОЙ КОНВЕЙЕР АНАЛИЗА
+      // ====================================================
+      async runAnalysis() {
+        if (this.files.length < 2) {
+          this.showToast({ type: 'error', title: 'Недостаточно файлов', message: 'Загрузите минимум 2 источника.' });
+          return;
+        }
+        this.canceled = false;
+        this.screen = 'processing';
+        this.progressLog = [];
+        this.results = { perDocument: [], combined: null, rose: null, clusters: null, river: null, recommendation: null };
+
+        // Считаем общее число шагов:
+        //   на файл: extract + facts + summary + rose = 4 этапа
+        //   глобально: merge + общая роза + кластеры + (река, если есть) + рекомендация
+        const hasTwoPeriods = this.files.some(f => f.period === 'p1') && this.files.some(f => f.period === 'p2');
+        const perFileSteps = 4;
+        const globalSteps  = 4 + (hasTwoPeriods ? 1 : 0);
+        this.progress.totalSteps = perFileSteps * this.files.length + globalSteps;
+        this.progress.totalFiles = this.files.length;
+        this.progress.currentStep = 0;
+        this.progress.currentFileIdx = 0;
+        this.progress.percent = 0;
+
+        try {
+          // ----- 1) Обработка каждого файла последовательно -----
+          for (let i = 0; i < this.files.length; i++) {
+            if (this.canceled) throw new Error('Отмена пользователем.');
+            const f = this.files[i];
+            this.progress.currentFileIdx = i + 1;
+
+            // Этап A — извлечение текста
+            this.bumpStep(`Извлекаем текст из ${f.name}…`, f.name);
+            const logIdA = this.logStart(`Извлечение текста: ${f.name}`);
+            let extracted = null;
+            try {
+              extracted = await this.extractText(f);
+              f.text = extracted.text;
+              f.pageMap = extracted.pageMap;
+              this.logDone(logIdA);
+            } catch (e) {
+              this.logError(logIdA, e.message);
+              this.showToast({ type: 'error', title: 'Не удалось прочитать файл', message: `${f.name}: ${e.message}` });
+              continue; // пропускаем файл
+            }
+
+            // Текст для модели — обрезаем до разумного размера (40k символов ~ 10-12k токенов)
+            const textForModel = (extracted.text || '').slice(0, 40000);
+
+            // Этап B — факты
+            this.bumpStep(`Извлекаем факты из ${f.name}…`, f.name);
+            const logIdB = this.logStart(`Факты: ${f.name}`);
+            let factsRaw = null;
+            try {
+              factsRaw = await this.callAIJson(PROMPTS.extractFacts(textForModel),
+                { title: f.name, author: '', facts: [] });
+              this.logDone(logIdB);
+            } catch (e) {
+              this.logError(logIdB, e.message);
+              this.showToast({
+                type: 'error',
+                title: 'Ошибка извлечения фактов',
+                message: `${f.name}: ${e.message}`,
+                onRetry: () => this.retryFileStep(i, 'facts'),
+              });
+              factsRaw = { title: f.name, author: '', facts: [] };
+            }
+
+            // Этап C — саммари
+            this.bumpStep(`Готовим саммари: ${f.name}…`, f.name);
+            const logIdC = this.logStart(`Саммари: ${f.name}`);
+            let summary = null;
+            try {
+              summary = await this.callAIJson(PROMPTS.summarize(textForModel),
+                { title_original: f.name, title_translated: f.name, author: '', year: '', summary: [] });
+              this.logDone(logIdC);
+            } catch (e) {
+              this.logError(logIdC, e.message);
+              this.showToast({
+                type: 'error',
+                title: 'Ошибка саммари',
+                message: `${f.name}: ${e.message}`,
+                onRetry: () => this.retryFileStep(i, 'summary'),
+              });
+              summary = { title_original: f.name, title_translated: f.name, author: '', year: '', summary: [] };
+            }
+
+            // Этап D — роза по документу
+            this.bumpStep(`Строим розу для ${f.name}…`, f.name);
+            const logIdD = this.logStart(`Роза: ${f.name}`);
+            let rosePerDoc = null;
+            try {
+              const factsJson = JSON.stringify(factsRaw, null, 2).slice(0, 60000);
+              rosePerDoc = await this.callAIJson(PROMPTS.rosePerDoc(factsJson),
+                { classes: [], sum_check: 0 });
+              this.logDone(logIdD);
+            } catch (e) {
+              this.logError(logIdD, e.message);
+              this.showToast({
+                type: 'error',
+                title: 'Ошибка розы документа',
+                message: `${f.name}: ${e.message}`,
+                onRetry: () => this.retryFileStep(i, 'rose'),
+              });
+              rosePerDoc = { classes: [], sum_check: 0 };
+            }
+
+            // Нормализуем розу и сохраняем
+            const normalized = normalizeRose(rosePerDoc.classes || []);
+            const docResult = {
+              id: f.id,
+              fileName: f.name,
+              size: f.size,
+              pages: (extracted && extracted.pages) || '—',
+              period: f.period,
+              factsRaw,
+              summary,
+              rose: { classes: normalized.classes, normalized: normalized.normalized },
+              expanded: false,
+            };
+            this.results.perDocument.push(docResult);
+          }
+
+          // ----- 2) Объединение фактов -----
+          this.bumpStep('Объединяем факты в общую базу…', '');
+          const logMerge = this.logStart('Объединение фактов из всех источников');
+          let combined = null;
+          try {
+            const allFactsPayload = JSON.stringify(this.results.perDocument.map(d => ({
+              author: (d.summary && d.summary.author) || (d.factsRaw && d.factsRaw.author) || '',
+              title:  (d.summary && d.summary.title_original) || (d.factsRaw && d.factsRaw.title) || d.fileName,
+              facts: (d.factsRaw && d.factsRaw.facts) || [],
+            }))).slice(0, 80000);
+            combined = await this.callAIJson(PROMPTS.mergeFacts(allFactsPayload), { facts: [] });
+            this.logDone(logMerge);
+          } catch (e) {
+            this.logError(logMerge, e.message);
+            this.showToast({ type: 'error', title: 'Ошибка объединения', message: e.message });
+            combined = { facts: [] };
+          }
+          this.results.combined = combined;
+
+          // ----- 3) Общая роза — вычисляется локально по формуле: sum(count класса) / count(все факты) -----
+          this.bumpStep('Строим общую розу распределения…', '');
+          const logRose = this.logStart('Общая роза');
+          let rose = { classes: [], sum_check: 100 };
+          try {
+            rose = buildCombinedRoseFromDocuments(this.results.perDocument);
+            this.logDone(logRose);
+          } catch (e) {
+            this.logError(logRose, e.message);
+            this.showToast({ type: 'error', title: 'Ошибка общей розы', message: e.message });
+          }
+          this.results.rose = { classes: rose.classes || [], normalized: false };
+
+          // ----- 4) Кластеры -----
+          this.bumpStep('Кластеризуем факты в темы…', '');
+          const logClust = this.logStart('Кластеризация');
+          let clusters = null;
+          try {
+            const factsSource = (combined && Array.isArray(combined.facts) && combined.facts.length > 0)
+              ? combined
+              : { facts: this.results.perDocument.flatMap(d => (d.factsRaw && d.factsRaw.facts) || []) };
+            const factsPayload = JSON.stringify(factsSource, null, 2).slice(0, 80000);
+            clusters = await this.callAIJson(PROMPTS.clusters(factsPayload), { clusters: [] });
+            this.logDone(logClust);
+          } catch (e) {
+            this.logError(logClust, e.message);
+            this.showToast({ type: 'error', title: 'Ошибка кластеризации', message: e.message });
+            clusters = { clusters: [] };
+          }
+          // Сортировка по убыванию share
+          if (Array.isArray(clusters.clusters)) {
+            clusters.clusters.sort((a, b) => num(b.share) - num(a.share));
+          }
+          // Локальный фолбэк: если AI вернул пустые кластеры — строим из данных розы
+          if (!Array.isArray(clusters.clusters) || clusters.clusters.length === 0) {
+            const roseClasses = (rose && rose.classes) || [];
+            clusters = {
+              clusters: roseClasses
+                .filter(c => num(c.share) > 0)
+                .sort((a, b) => num(b.share) - num(a.share))
+                .map((c, i) => ({
+                  n: i + 1,
+                  name: c.name,
+                  share: +num(c.share).toFixed(1),
+                  description: getClassMeta(c.id).description,
+                  authors: [],
+                }))
+            };
+          }
+          this.results.clusters = clusters;
+
+          // ----- 5) Река (если есть оба периода) -----
+          if (hasTwoPeriods) {
+            this.bumpStep('Строим реку трендов между периодами…', '');
+            const logRiver = this.logStart('Река трендов');
+            let clustersP1 = { clusters: [] };
+            let clustersP2 = { clusters: [] };
+            try {
+              const docsP1 = this.results.perDocument.filter(d => {
+                const f = this.files.find(x => x.id === d.id);
+                return f && f.period === 'p1';
+              });
+              const docsP2 = this.results.perDocument.filter(d => {
+                const f = this.files.find(x => x.id === d.id);
+                return f && f.period === 'p2';
+              });
+
+              // Кластеризация каждого периода отдельно (используем уже полученные общие кластеры
+              // как fallback — на практике запросим отдельные кластеры по периодам)
+              const factsP1 = JSON.stringify(docsP1.map(d => ({
+                author: (d.summary && d.summary.author) || '',
+                title: (d.summary && d.summary.title_original) || d.fileName,
+                facts: (d.factsRaw && d.factsRaw.facts) || [],
+              }))).slice(0, 50000);
+              const factsP2 = JSON.stringify(docsP2.map(d => ({
+                author: (d.summary && d.summary.author) || '',
+                title: (d.summary && d.summary.title_original) || d.fileName,
+                facts: (d.factsRaw && d.factsRaw.facts) || [],
+              }))).slice(0, 50000);
+
+              clustersP1 = await this.callAIJson(PROMPTS.clusters(factsP1), { clusters: [] }, { maxTokens: 2500 });
+              clustersP2 = await this.callAIJson(PROMPTS.clusters(factsP2), { clusters: [] }, { maxTokens: 2500 });
+
+              const river = await this.callAIJson(
+                PROMPTS.river(JSON.stringify(clustersP1), JSON.stringify(clustersP2)),
+                { table: [] },
+                { maxTokens: 1800, retries: 1 }
+              );
+              this.results.river = { mermaid: '', table: (river && Array.isArray(river.table)) ? river.table : rowsFromMermaid(river && river.mermaid) };
+              this.logDone(logRiver);
+            } catch (e) {
+              this.logError(logRiver, e.message);
+              this.showToast({ type: 'error', title: 'Ошибка реки трендов', message: e.message });
+              this.results.river = { mermaid: '', table: [] };
+            }
+          }
+
+          // ----- 6) Рекомендация -----
+          this.bumpStep('Сравниваем вашу боль с найденным материалом…', '');
+          const logRec = this.logStart('Рекомендация по добору источников');
+          try {
+            const rec = await this.callAIJson(
+              PROMPTS.recommend(
+                this.pain,
+                this.strategy,
+                this.biasClass,
+                JSON.stringify(this.results.rose),
+                JSON.stringify(this.results.clusters)
+              ),
+              { verdict: 'gap', recommendation_text: 'Не удалось получить рекомендацию.', suggested_sources: [] },
+              { maxTokens: 1800, retries: 1 }
+            );
+            this.results.recommendation = rec;
+            this.logDone(logRec);
+          } catch (e) {
+            this.logError(logRec, e.message);
+            this.showToast({ type: 'error', title: 'Ошибка рекомендации', message: e.message });
+            this.results.recommendation = { verdict: 'gap', recommendation_text: 'Не удалось получить рекомендацию.', suggested_sources: [] };
+          }
+
+          // Финал
+          this.generatedAt = new Date().toLocaleString('ru-RU');
+          this.progress.percent = 100;
+          this.screen = 'results';
+
+        } catch (e) {
+          if (!this.canceled) {
+            this.showToast({ type: 'error', title: 'Анализ прерван', message: e.message });
+          }
+          // Возвращаем пользователя на upload, если ничего не успели
+          if (this.results.perDocument.length === 0) {
+            this.screen = 'upload';
+          } else {
+            // Что-то всё-таки есть — покажем то, что вышло
+            this.generatedAt = new Date().toLocaleString('ru-RU');
+            this.screen = 'results';
+          }
+        }
+      },
+
+      cancelAnalysis() {
+        if (!confirm('Прервать анализ? Прогресс будет потерян.')) return;
+        this.canceled = true;
+        this.screen = 'upload';
+      },
+
+      retryFileStep(i, step) {
+        // Простой повтор: предлагаем перезапустить полный анализ
+        this.showToast({ type: 'info', title: 'Повтор', message: 'Запустите анализ заново — текущий прогресс этого этапа будет повторён.' });
+      },
+
+      // ====================================================
+      // ПРОГРЕСС-БАР И ЛОГ
+      // ====================================================
+      bumpStep(taskText, detail) {
+        this.progress.currentStep += 1;
+        this.progress.currentTask = taskText;
+        this.progress.currentDetail = detail || '';
+        this.progress.percent = Math.min(100, (this.progress.currentStep / this.progress.totalSteps) * 100);
+      },
+      logStart(text) {
+        const id = this.progressLog.length;
+        this.progressLog.unshift({ id, text, status: 'pending' });
+        return id;
+      },
+      logDone(id) {
+        const item = this.progressLog.find(x => x.id === id);
+        if (item) item.status = 'done';
+      },
+      logError(id, msg) {
+        const item = this.progressLog.find(x => x.id === id);
+        if (item) { item.status = 'error'; item.text += ` — ошибка: ${msg}`; }
+      },
+
+      // ====================================================
+      // TOASTS
+      // ====================================================
+      showToast({ type = 'info', title, message, onRetry = null }) {
+        const id = 't_' + Math.random().toString(36).slice(2, 10);
+        this.toasts.push({ id, type, title, message, onRetry });
+        if (!onRetry) {
+          setTimeout(() => this.dismissToast(id), 6000);
+        }
+      },
+      dismissToast(id) {
+        this.toasts = this.toasts.filter(t => t.id !== id);
+      },
+
+      // ====================================================
+      // ВСПОМОГАТЕЛЬНЫЕ ДЛЯ UI
+      // ====================================================
+      num(v) { return num(v); },
+      formatShare(v) {
+        const n = num(v);
+        return n.toFixed(n < 10 ? 1 : 0) + '%';
+      },
+      classColorById(id) {
+        return getClassMeta(id).color;
+      },
+      getBiasName() {
+        const c = CLASS_REGISTRY.find(x => x.id === this.biasClass);
+        return c ? c.name : '';
+      },
+      totalFactsCount() {
+        return this.results.perDocument.reduce((acc, d) =>
+          acc + (d.factsRaw && Array.isArray(d.factsRaw.facts) ? d.factsRaw.facts.length : 0), 0);
+      },
+      riverRows() {
+        const river = this.results.river || {};
+        if (Array.isArray(river.table) && river.table.length > 0) return river.table;
+        return rowsFromMermaid(river.mermaid || '');
+      },
+      verdictLabel(v) {
+        if (v === 'balanced') return 'Сбалансировано';
+        if (v === 'surplus')  return 'Избыток';
+        if (v === 'gap')      return 'Пробел';
+        return 'Анализ';
+      },
+      statusBadgeClass(status) {
+        const s = (status || '').toLowerCase();
+        if (s.includes('преемствен'))  return 'bg-emerald-50 text-emerald-700 border border-emerald-100';
+        if (s.includes('слиян'))       return 'bg-blue-50 text-blue-700 border border-blue-100';
+        if (s.includes('расщеп'))      return 'bg-amber-50 text-amber-700 border border-amber-100';
+        if (s.includes('исчезнов'))    return 'bg-red-50 text-red-700 border border-red-100';
+        if (s.includes('появлен'))     return 'bg-violet-50 text-violet-700 border border-violet-100';
+        if (s.includes('возрожден'))   return 'bg-pink-50 text-pink-700 border border-pink-100';
+        return 'bg-gray-50 text-gray-700 border border-gray-100';
+      },
+
+      // ====================================================
+      // ОТРИСОВКА ЧАРТОВ
+      // ====================================================
+      _chartInstances: {},
+
+      renderMainRose() {
+        const ctx = document.getElementById('rose-main');
+        if (!ctx || !this.results.rose || !Array.isArray(this.results.rose.classes)) return;
+
+        const classes = this.results.rose.classes;
+        const orderedIds = CLASS_REGISTRY.map(c => c.id);
+        const ordered = orderedIds.map(id => {
+          const found = classes.find(c => c.id === id) || classes.find(c => (c.name || '').toLowerCase() === (getClassMeta(id).name || '').toLowerCase());
+          return found ? { id, name: getClassMeta(id).name, share: num(found.share) }
+                       : { id, name: getClassMeta(id).name, share: 0 };
+        });
+
+        // Перезаписываем нормализованные данные в state, чтобы легенда совпала
+        this.results.rose.classes = ordered;
+
+        if (this._chartInstances.main) {
+          try { this._chartInstances.main.destroy(); } catch (e) {}
+        }
+
+        this._chartInstances.main = new Chart(ctx, {
+          type: 'radar',
+          data: {
+            labels: ordered.map(c => c.name),
+            datasets: [{
+              label: 'Доля фактов (%)',
+              data: ordered.map(c => c.share > 0 ? c.share : 5),
+              backgroundColor: 'rgba(236, 72, 153, 0.2)',
+              borderColor: '#EC4899',
+              borderWidth: 2,
+              pointBackgroundColor: ordered.map(c => getClassMeta(c.id).color),
+              pointBorderColor: '#ffffff',
+              pointRadius: 5,
+              pointHoverRadius: 7,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: (item) => {
+                    const real = ordered[item.dataIndex].share;
+                    if (real === 0) return `${item.label}: не представлена`;
+                    return `${item.label}: ${real.toFixed(1)}%`;
+                  },
+                },
+              },
+            },
+            scales: {
+              r: {
+                angleLines: { color: '#E5E7EB' },
+                grid: { color: '#E5E7EB' },
+                pointLabels: {
+                  font: { size: 13, weight: '600' },
+                  color: '#1F2937',
+                },
+                ticks: {
+                  backdropColor: 'transparent',
+                  color: '#9CA3AF',
+                  font: { size: 10 },
+                  callback: (v) => v + '%',
+                },
+                suggestedMin: 0,
+                suggestedMax: Math.max(50, Math.ceil((Math.max(...ordered.map(c => c.share), 10) + 5) / 10) * 10),
+              },
+            },
+          },
+        });
+      },
+
+      renderDocChart(doc) {
+        if (!doc || !doc.rose || !Array.isArray(doc.rose.classes)) return;
+        const canvas = document.getElementById('rose-doc-' + doc.id);
+        if (!canvas) return;
+
+        const orderedIds = CLASS_REGISTRY.map(c => c.id);
+        const ordered = orderedIds.map(id => {
+          const found = doc.rose.classes.find(c => c.id === id) || doc.rose.classes.find(c => (c.name || '').toLowerCase() === (getClassMeta(id).name || '').toLowerCase());
+          return found ? { id, name: getClassMeta(id).short, share: num(found.share) }
+                       : { id, name: getClassMeta(id).short, share: 0 };
+        });
+
+        const key = 'doc_' + doc.id;
+        if (this._chartInstances[key]) {
+          try { this._chartInstances[key].destroy(); } catch (e) {}
+        }
+
+        this._chartInstances[key] = new Chart(canvas, {
+          type: 'radar',
+          data: {
+            labels: ordered.map(c => c.name),
+            datasets: [{
+              label: '%',
+              data: ordered.map(c => c.share > 0 ? c.share : 5),
+              backgroundColor: 'rgba(236, 72, 153, 0.2)',
+              borderColor: '#EC4899',
+              borderWidth: 1.5,
+              pointBackgroundColor: ordered.map(c => getClassMeta(c.id).color),
+              pointRadius: 3,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              r: {
+                pointLabels: { font: { size: 10 }, color: '#4B5563' },
+                ticks: { display: false, backdropColor: 'transparent' },
+                angleLines: { color: '#E5E7EB' },
+                grid: { color: '#E5E7EB' },
+                suggestedMin: 0,
+              },
+            },
+          },
+        });
+      },
+
+      // ====================================================
+      // ЭКСПОРТ В PDF
+      // ====================================================
+      async exportPdf() {
+        if (this.exporting) return;
+        this.exporting = true;
+
+        const root = document.getElementById('report-root');
+        if (!root) { this.exporting = false; return; }
+
+        // 1. Раскрываем все аккордеоны, чтобы мини-розы были видны
+        const allDetails = root.querySelectorAll('details');
+        const originalOpen = [];
+        allDetails.forEach((d, i) => {
+          originalOpen[i] = d.open;
+          d.open = true;
+        });
+
+        // 2. Принудительно рендерим мини-розы для каждого документа
+        for (const doc of this.results.perDocument) {
+          this.renderDocChart(doc);
+        }
+
+        // 3. Ждём завершения рендера canvas
+        await new Promise(r => setTimeout(r, 1000));
+
+        // 4. Снимаем dataURL с canvas до клонирования (canvas не копируется structuredClone/cloneNode)
+        const origCanvases = [...root.querySelectorAll('canvas')];
+        const dataUrls = origCanvases.map(c => {
+          try { return c.toDataURL('image/png'); } catch (e) { return null; }
+        });
+
+        // 5. Клонируем корневой элемент
+        const clone = root.cloneNode(true);
+
+        // 6. В клоне заменяем canvas → img с сохранёнными размерами
+        const cloneCanvases = [...clone.querySelectorAll('canvas')];
+        origCanvases.forEach((orig, i) => {
+          if (dataUrls[i] && cloneCanvases[i]) {
+            const img = document.createElement('img');
+            img.src = dataUrls[i];
+            img.style.cssText = `width:${orig.offsetWidth}px;height:${orig.offsetHeight}px;display:block;max-width:100%;`;
+            cloneCanvases[i].replaceWith(img);
+          }
+        });
+
+        // 7. Убираем no-print, раскрываем details в клоне
+        clone.querySelectorAll('.no-print').forEach(el => el.remove());
+        clone.querySelectorAll('details').forEach(d => { d.open = true; });
+
+        // 8. Помещаем клон в изолированный контейнер фиксированной ширины вне viewport
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'position:fixed;left:-9999px;top:0;width:1024px;background:#ffffff;padding:24px 28px;box-sizing:border-box;';
+        wrapper.appendChild(clone);
+        document.body.appendChild(wrapper);
+
+        await new Promise(r => setTimeout(r, 300));
+
+        try {
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          const opt = {
+            margin:      [8, 8, 8, 8],
+            filename:    `dokazatelnaya-karta-${stamp}.pdf`,
+            image:       { type: 'jpeg', quality: 0.92 },
+            html2canvas: {
+              scale:           2,
+              useCORS:         true,
+              logging:         false,
+              backgroundColor: '#ffffff',
+              windowWidth:     1024,
+            },
+            jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            pagebreak:   { mode: ['css', 'legacy'], avoid: ['.print-card'] },
+          };
+          await html2pdf().set(opt).from(wrapper).save();
+          this.showToast({ type: 'success', title: 'Готово', message: 'PDF-отчёт сохранён.' });
+        } catch (e) {
+          this.showToast({ type: 'error', title: 'Ошибка экспорта', message: e.message });
+        } finally {
+          document.body.removeChild(wrapper);
+          allDetails.forEach((d, i) => { d.open = originalOpen[i]; });
+          this.exporting = false;
+        }
+      },
+
+      // ====================================================
+      // СБРОС
+      // ====================================================
+      confirmReset() {
+        if (!confirm('Начать новый анализ? Загруженные файлы и результаты будут очищены. API-ключ сохранится.')) return;
+        this.reset();
+      },
+      reset() {
+        // Удаляем чарты
+        Object.values(this._chartInstances).forEach(ch => { try { ch.destroy(); } catch (e) {} });
+        this._chartInstances = {};
+
+        this.files = [];
+        this.pain = '';
+        this.strategy = 'balanced';
+        this.biasClass = '';
+        this.results = { perDocument: [], combined: null, rose: null, clusters: null, river: null, recommendation: null };
+        this.progressLog = [];
+        this.generatedAt = '';
+        this.canceled = false;
+        sessionStorage.removeItem('dkn_state_v1');
+        this.screen = 'intro';
+      },
+    };
+  }
+</script>
+
+</body>
+</html>
